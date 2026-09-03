@@ -30,6 +30,20 @@ export function isShortAnswer(q: QuizQuestion): boolean {
   return q.type === 'short_answer';
 }
 
+/**
+ * Review-UI counterpart of resolveAnswerKeyToValue: whether an option is the
+ * (canonically) correct one for a stored answer key. Tolerates content/letter
+ * and formatting variants so persisted courses highlight correctly in review
+ * mode, matching the grading-side resolution.
+ */
+export function answerIncludesOption(
+  answer: string[] | string | undefined,
+  optionValue: string,
+): boolean {
+  const ca = canonAnswerKey(optionValue);
+  return toArray(answer).some((a) => canonAnswerKey(a) === ca);
+}
+
 /** Grade choice questions locally. Returns results only for non-short-answer questions. */
 // Canonical form for tolerant answer-key matching: NFKC (full-width →
 // half-width), strip all whitespace, lowercase. AI-generated answer keys
@@ -46,13 +60,36 @@ function canonAnswerKey(s: string): string {
  * option's label, map to that option's value; otherwise leave it untouched
  * (ambiguous or truly unknown keys must not be silently re-pointed).
  */
+/**
+ * Single-letter probe: if the stored key is a lone letter wrapped in common
+ * punctuation ("（Ｂ）", "(b)", "B."), return that letter (upper-case);
+ * otherwise null. Letters are matched against option VALUES.
+ */
+export function singleLetterProbe(answer: string): string | null {
+  let t = answer.trim().normalize('NFKC');
+  t = t.replace(/^[（(\[【\s]+/, '').replace(/[）)\]】\s]+$/, '');
+  t = t.replace(/[.、。:：]+$/, '');
+  t = t.toLowerCase();
+  return /^[a-z]$/.test(t) ? t.toUpperCase() : null;
+}
+
 export function resolveAnswerKeyToValue(q: QuizQuestion, answer: string): string {
   const opts = q.options ?? [];
   if (opts.length === 0) return answer;
   const ca = canonAnswerKey(answer);
-  if (opts.some((o) => canonAnswerKey(o.value) === ca)) return answer;
-  const labelMatches = opts.filter((o) => canonAnswerKey(o.label) === ca);
-  if (labelMatches.length === 1) return labelMatches[0].value;
+  const probe = singleLetterProbe(answer);
+  // Collect every option matching the stored key canonically (by value, by
+  // label, or by single-letter probe). Convert only when exactly one option
+  // matches, and return that option's actual value — so grading compares the
+  // user's submission with the option value even when the persisted key
+  // differs cosmetically (full-width chars, spacing, wrappers) from it.
+  const matches = opts.filter(
+    (o) =>
+      canonAnswerKey(o.value) === ca ||
+      canonAnswerKey(o.label) === ca ||
+      (probe !== null && canonAnswerKey(o.value) === probe.toLowerCase()),
+  );
+  if (matches.length === 1) return matches[0].value;
   return answer;
 }
 
