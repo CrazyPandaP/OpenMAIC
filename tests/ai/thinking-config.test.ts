@@ -95,6 +95,16 @@ describe('thinking config metadata', () => {
       'deepseek-v4-flash',
       'deepseek-v4-flash-vision-exp',
     ]);
+    // Pin the vision model's capabilities so a regression to vision: false
+    // (silently dropping document images during generation) fails this test.
+    const visionModel = getProvider('deepseek')?.models.find(
+      (m) => m.id === 'deepseek-v4-flash-vision-exp',
+    );
+    expect(visionModel?.capabilities).toMatchObject({
+      streaming: true,
+      tools: true,
+      vision: true,
+    });
     expect(hunyuanModels).toEqual(['hy3-preview']);
     expect(minimaxModels).toEqual(['MiniMax-M3', 'MiniMax-M2.7']);
     expect(siliconflowModels).not.toContain('MiniMaxAI/MiniMax-M2');
