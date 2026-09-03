@@ -168,7 +168,7 @@ describe('multiple-choice with persisted formatting-variant keys', () => {
   };
 
   test('resolves to option values and grades a fully-correct selection', () => {
-    const resolved = multi.answer.map((a) => resolveAnswerKeyToValue(multi, a));
+    const resolved = (multi.answer ?? []).map((a) => resolveAnswerKeyToValue(multi, a));
     expect(resolved).toEqual(['A', 'C']);
     const results = gradeChoiceQuestions([multi], { q4: ['A', 'C'] });
     expect(results[0].correct).toBe(true);
