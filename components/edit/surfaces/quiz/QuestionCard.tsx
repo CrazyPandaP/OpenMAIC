@@ -226,7 +226,7 @@ export function QuestionCard({ question: q, index, expanded, onToggle }: Props) 
             <Field label={t('edit.quiz.optionsLabel')}>
               <div className="flex flex-col gap-1.5">
                 {(q.options ?? []).map((opt, i) => {
-                  const correct = answerIncludesOption(q.answer, opt.value);
+                  const correct = answerIncludesOption(q, opt.value);
                   // `opt.value` is the positional letter (A/B/C…), so this key
                   // is positional, not identity-stable. That's intentional:
                   // QuizOption has no id, and reorder is driven by the up/down

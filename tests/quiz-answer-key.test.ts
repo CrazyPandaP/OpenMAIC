@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'vitest';
 
-import { gradeChoiceQuestions, resolveAnswerKeyToValue } from '@/lib/quiz/grading';
+import {
+  answerIncludesOption,
+  gradeChoiceQuestions,
+  resolveAnswerKeyToValue,
+} from '@/lib/quiz/grading';
 import { normalizeQuizAnswer } from '../packages/@openmaic/generation/src/scene-generator';
 import type { QuizQuestion } from '@/lib/types/stage';
 
@@ -18,159 +22,147 @@ const RELATION_OPTIONS = [
   { value: 'D', label: '反向' },
 ];
 
-describe('normalizeQuizAnswer (generation side)', () => {
-  test('letter answer resolves to itself', () => {
-    const answers = normalizeQuizAnswer({ answer: 'A' }, VECTOR_OPTIONS);
-    expect(answers).toEqual(['A']);
-  });
-
-  test('content answer resolves to the matching option value', () => {
-    const answers = normalizeQuizAnswer({ answer: '(6, 2)' }, VECTOR_OPTIONS);
-    expect(answers).toEqual(['A']);
-  });
-
-  test('full-width formatting variant resolves via NFKC', () => {
-    const answers = normalizeQuizAnswer({ answer: '（６，２）' }, VECTOR_OPTIONS);
-    expect(answers).toEqual(['A']);
-  });
-
-  test('content without inner spaces resolves to the spaced option', () => {
-    const answers = normalizeQuizAnswer({ answer: '(6,2)' }, VECTOR_OPTIONS);
-    expect(answers).toEqual(['A']);
-  });
-
-  test('trailing-space Chinese content resolves to the trimmed option', () => {
-    const answers = normalizeQuizAnswer({ answer: '垂直 ' }, RELATION_OPTIONS);
-    expect(answers).toEqual(['B']);
-  });
-
-  test('multiple letter answers pass through', () => {
-    const answers = normalizeQuizAnswer({ answer: ['A', 'C'] }, VECTOR_OPTIONS);
-    expect(answers).toEqual(['A', 'C']);
-  });
-
-  test('unknown answer passes through untouched', () => {
-    const answers = normalizeQuizAnswer({ answer: '正交' }, RELATION_OPTIONS);
-    expect(answers).toEqual(['正交']);
-  });
-
-  test('wrapped full-width single-letter key resolves via letter probe', () => {
-    const answers = normalizeQuizAnswer({ answer: '（Ｂ）' }, VECTOR_OPTIONS);
-    expect(answers).toEqual(['B']);
-  });
-  test('missing options passes answers through untouched', () => {
-    const answers = normalizeQuizAnswer({ answer: '(6, 2)' }, undefined);
-    expect(answers).toEqual(['(6, 2)']);
-  });
-});
-
-describe('resolveAnswerKeyToValue (grading side, fixes already-generated courses)', () => {
-  const question = {
-    id: 'q1',
-    type: 'single' as const,
-    question: 'a+b=?',
-    options: VECTOR_OPTIONS,
-    answer: ['(6,2)'], // LLM wrote content variant instead of the value "A"
+function q(options: { value: string; label: string }[], answer?: string[]): QuizQuestion {
+  return {
+    id: 'qx',
+    type: 'single',
+    question: '?',
+    options,
+    answer: answer ?? ['A'], // 默认存储一个值键，供投影测试使用
     hasAnswer: true,
     points: 10,
   };
+}
 
-  test('content-variant key resolves to the matching option value', () => {
-    expect(resolveAnswerKeyToValue(question, '(6,2)')).toBe('A');
+describe('resolveAnswerKeyToValue: exact alignment only', () => {
+  test('exact option value resolves to itself', () => {
+    expect(resolveAnswerKeyToValue(q(VECTOR_OPTIONS), 'A')).toBe('A');
   });
 
-  test('exact value key resolves to itself', () => {
-    expect(resolveAnswerKeyToValue(question, 'A')).toBe('A');
+  test('exact unique label resolves to that option value', () => {
+    expect(resolveAnswerKeyToValue(q(VECTOR_OPTIONS), '(6, 2)')).toBe('A');
   });
 
-  test('ambiguous key stays untouched', () => {
-    expect(resolveAnswerKeyToValue(question, '正交')).toBe('正交');
+  test('unknown key stays unresolved', () => {
+    expect(resolveAnswerKeyToValue(q(VECTOR_OPTIONS), '(9, 9)')).toBe('(9, 9)');
+  });
+
+  test('ambiguous: two options sharing one label stays unresolved', () => {
+    const dup = [
+      { value: 'A', label: 'same' },
+      { value: 'B', label: 'same' },
+    ];
+    expect(resolveAnswerKeyToValue(q(dup), 'same')).toBe('same');
   });
 });
 
-describe('gradeChoiceQuestions end-to-end with a content-variant key', () => {
-  test('user picking the correct option is graded correct', () => {
+describe('negative cases: formatting differences are NOT silently equivalent', () => {
+  test('case-differing key stays unresolved', () => {
+    expect(resolveAnswerKeyToValue(q(VECTOR_OPTIONS), 'a')).toBe('a');
+  });
+
+  test('whitespace-differing key stays unresolved', () => {
+    expect(resolveAnswerKeyToValue(q(VECTOR_OPTIONS), '(6,2)')).toBe('(6,2)');
+    expect(resolveAnswerKeyToValue(q(VECTOR_OPTIONS), '(6,  2)')).toBe('(6,  2)');
+  });
+
+  test('full-width wrapped key stays unresolved', () => {
+    expect(resolveAnswerKeyToValue(q(VECTOR_OPTIONS), '（Ｂ）')).toBe('（Ｂ）');
+  });
+
+  test('wrapped/prefixed letter key stays unresolved', () => {
+    expect(resolveAnswerKeyToValue(q(VECTOR_OPTIONS), '(B)')).toBe('(B)');
+    expect(resolveAnswerKeyToValue(q(VECTOR_OPTIONS), 'B.')).toBe('B.');
+  });
+});
+
+describe('answerIncludesOption: exact resolver projection', () => {
+  test('exact value and exact unique label both project to the option', () => {
+    const question = q(VECTOR_OPTIONS, ['(6, 2)']); // label 存储
+    expect(answerIncludesOption(question, 'A')).toBe(true); // label 解析后命中选项 A
+    expect(answerIncludesOption(question, 'B')).toBe(false);
+  });
+
+  test('case/whitespace/full-width/wrapper differences project to false', () => {
+    expect(answerIncludesOption(q(VECTOR_OPTIONS), 'a')).toBe(false);
+    expect(answerIncludesOption(q(VECTOR_OPTIONS), '（Ｂ）')).toBe(false);
+    expect(answerIncludesOption(q(VECTOR_OPTIONS), '(6,2)')).toBe(false);
+  });
+
+  test('ambiguous labels project to false for every option', () => {
+    const dup = [
+      { value: 'A', label: 'same' },
+      { value: 'B', label: 'same' },
+    ];
+    const question = q(dup, ['same']); // 歧义存储：投影对任何选项都是 false
+    expect(answerIncludesOption(question, 'A')).toBe(false);
+    expect(answerIncludesOption(question, 'B')).toBe(false);
+  });
+});
+
+describe('gradeChoiceQuestions: consumer paths', () => {
+  test('persisted exact-label key grades correct in single-choice review', () => {
     const question: QuizQuestion = {
       id: 'q1',
       type: 'single',
-      question: '已知向量 a = (2, 3)，向量 b = (4, -1)，则向量 a + b 的坐标是?',
+      question: 'a+b=?',
       options: VECTOR_OPTIONS,
-      answer: ['(6,2)'],
+      answer: ['(6, 2)'], // 存储为 label（精确形态）
       hasAnswer: true,
       points: 10,
     };
     const results = gradeChoiceQuestions([question], { q1: 'A' });
     expect(results[0].correct).toBe(true);
-    expect(results[0].status).toBe('correct');
   });
-});
 
-describe('grading of persisted keys: canonical-equal but not byte-identical', () => {
-  const q: QuizQuestion = {
-    id: 'q2',
-    type: 'single',
-    question: 'u·v = 0 → 关系?',
-    options: RELATION_OPTIONS,
-    answer: ['垂直 '], // 尾随空格变体：非字节相等
-    hasAnswer: true,
-    points: 10,
-  };
-
-  test('persisted whitespace-variant key resolves to the option value and grades correct', () => {
-    const results = gradeChoiceQuestions([q], { q2: 'B' });
+  test('multiple-choice with exact-value and exact-label keys grades correct', () => {
+    const question: QuizQuestion = {
+      id: 'q2',
+      type: 'multiple',
+      question: 'select all',
+      options: VECTOR_OPTIONS,
+      answer: ['A', '(2, -4)'], // 值 + 精确 label 混合存储
+      hasAnswer: true,
+      points: 10,
+    };
+    const results = gradeChoiceQuestions([question], { q2: ['A', 'B'] });
     expect(results[0].correct).toBe(true);
   });
 
-  test('full-width variant of a persisted key resolves and grades correct', () => {
-    const fw: QuizQuestion = { ...q, answer: ['（Ｂ）'] };
-    const results = gradeChoiceQuestions([fw], { q2: 'B' });
-    expect(results[0].correct).toBe(true);
-  });
-});
-
-describe('ambiguous canonical matches fail closed', () => {
-  const dupOptions = [
-    { value: 'A', label: '(6, 2)' },
-    { value: 'B', label: '(6,2)' }, // 规范化后与 A 的 label 相同 → 歧义
-  ];
-  const dupQuestion: QuizQuestion = {
-    id: 'q3',
-    type: 'single',
-    question: '?',
-    options: dupOptions,
-    answer: ['(6, 2)'],
-    hasAnswer: true,
-    points: 10,
-  };
-
-  test('generation: ambiguous key stays untouched', () => {
-    const answers = normalizeQuizAnswer({ answer: '(6, 2)' }, dupOptions);
-    expect(answers).toEqual(['(6, 2)']);
-  });
-
-  test('grading: ambiguous key stays untouched (user picks either, still marked by exact match)', () => {
-    const results = gradeChoiceQuestions([dupQuestion], { q3: 'A' });
-    // 存储键与两个 label 都规范匹配 → 不可解析 → 选项值精确比对：
-    // 用户选 A（值 'A'）≠ 存储键 '(6, 2)' → 判错（fail-closed 的代价，如实断言）
+  test('formatting-variant keys do NOT silently grade correct (negative)', () => {
+    const question: QuizQuestion = {
+      id: 'q3',
+      type: 'single',
+      question: '?',
+      options: VECTOR_OPTIONS,
+      answer: ['(6,2)'], // 无空格变体：与任何选项值/label 都不精确相等
+      hasAnswer: true,
+      points: 10,
+    };
+    const results = gradeChoiceQuestions([question], { q3: 'A' });
     expect(results[0].correct).toBe(false);
   });
 });
 
-describe('multiple-choice with persisted formatting-variant keys', () => {
-  const multi: QuizQuestion = {
-    id: 'q4',
-    type: 'multiple',
-    question: '选出正确的坐标',
-    options: VECTOR_OPTIONS,
-    answer: ['（Ａ）', 'c'], // 全角包裹 + 小写字母变体
-    hasAnswer: true,
-    points: 10,
-  };
+describe('normalizeQuizAnswer (generation): narrowed exact alignment', () => {
+  test('exact value passes through', () => {
+    expect(normalizeQuizAnswer({ answer: 'A' }, VECTOR_OPTIONS)).toEqual(['A']);
+  });
 
-  test('resolves to option values and grades a fully-correct selection', () => {
-    const resolved = (multi.answer ?? []).map((a) => resolveAnswerKeyToValue(multi, a));
-    expect(resolved).toEqual(['A', 'C']);
-    const results = gradeChoiceQuestions([multi], { q4: ['A', 'C'] });
-    expect(results[0].correct).toBe(true);
+  test('exact unique label resolves to the option value', () => {
+    expect(normalizeQuizAnswer({ answer: '(6, 2)' }, VECTOR_OPTIONS)).toEqual(['A']);
+  });
+
+  test('formatting variants stay unresolved (fail closed)', () => {
+    expect(normalizeQuizAnswer({ answer: '(6,2)' }, VECTOR_OPTIONS)).toEqual(['(6,2)']);
+    expect(normalizeQuizAnswer({ answer: '（Ｂ）' }, VECTOR_OPTIONS)).toEqual(['（Ｂ）']);
+  });
+
+  test('ambiguous keys stay unresolved', () => {
+    const dup = [
+      { value: 'A', label: 'same' },
+      { value: 'B', label: 'same' },
+    ];
+    expect(normalizeQuizAnswer({ answer: 'same' }, dup)).toEqual(['same']);
   });
 });

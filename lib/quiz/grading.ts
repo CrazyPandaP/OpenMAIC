@@ -31,68 +31,34 @@ export function isShortAnswer(q: QuizQuestion): boolean {
 }
 
 /**
- * Review-UI counterpart of resolveAnswerKeyToValue: whether an option is the
- * (canonically) correct one for a stored answer key. Tolerates content/letter
- * and formatting variants so persisted courses highlight correctly in review
- * mode, matching the grading-side resolution.
+ * Resolve a stored answer-key entry to an option value. Exact, unique
+ * alignment only (per review): an entry that exactly equals one option VALUE
+ * resolves to it; one that exactly equals exactly one option LABEL resolves
+ * to that option's value. Unknown or ambiguous entries stay unresolved —
+ * no case folding, whitespace/Unicode normalization, or wrapper/prefix
+ * interpretation is applied.
  */
-export function answerIncludesOption(
-  answer: string[] | string | undefined,
-  optionValue: string,
-): boolean {
-  const ca = canonAnswerKey(optionValue);
-  return toArray(answer).some((a) => canonAnswerKey(a) === ca);
-}
-
-/** Grade choice questions locally. Returns results only for non-short-answer questions. */
-// Canonical form for tolerant answer-key matching: NFKC (full-width →
-// half-width), strip all whitespace, lowercase. AI-generated answer keys
-// often differ from option values by exactly these cosmetics.
-function canonAnswerKey(s: string): string {
-  return s.normalize('NFKC').replace(/\s+/g, '').toLowerCase();
-}
-
-/**
- * Resolve a stored answer-key entry to an option value. AI-generated keys
- * sometimes hold the option CONTENT ("(6, 2)", possibly with different
- * spacing/width) instead of the option VALUE ("A"). If the entry canonically
- * equals exactly one option's value, keep it; if it equals exactly one
- * option's label, map to that option's value; otherwise leave it untouched
- * (ambiguous or truly unknown keys must not be silently re-pointed).
- */
-/**
- * Single-letter probe: if the stored key is a lone letter wrapped in common
- * punctuation ("（Ｂ）", "(b)", "B."), return that letter (upper-case);
- * otherwise null. Letters are matched against option VALUES.
- */
-export function singleLetterProbe(answer: string): string | null {
-  let t = answer.trim().normalize('NFKC');
-  t = t.replace(/^[（(\[【\s]+/, '').replace(/[）)\]】\s]+$/, '');
-  t = t.replace(/[.、。:：]+$/, '');
-  t = t.toLowerCase();
-  return /^[a-z]$/.test(t) ? t.toUpperCase() : null;
-}
-
 export function resolveAnswerKeyToValue(q: QuizQuestion, answer: string): string {
   const opts = q.options ?? [];
   if (opts.length === 0) return answer;
-  const ca = canonAnswerKey(answer);
-  const probe = singleLetterProbe(answer);
-  // Collect every option matching the stored key canonically (by value, by
-  // label, or by single-letter probe). Convert only when exactly one option
-  // matches, and return that option's actual value — so grading compares the
-  // user's submission with the option value even when the persisted key
-  // differs cosmetically (full-width chars, spacing, wrappers) from it.
-  const matches = opts.filter(
-    (o) =>
-      canonAnswerKey(o.value) === ca ||
-      canonAnswerKey(o.label) === ca ||
-      (probe !== null && canonAnswerKey(o.value) === probe.toLowerCase()),
-  );
-  if (matches.length === 1) return matches[0].value;
+  const valueMatches = opts.filter((o) => o.value === answer);
+  if (valueMatches.length === 1) return valueMatches[0].value;
+  const labelMatches = opts.filter((o) => o.label === answer);
+  if (labelMatches.length === 1) return labelMatches[0].value;
   return answer;
 }
 
+/**
+ * Review-UI projection of the same exact resolver used for grading: whether
+ * an option's value is among the question's resolved correct-answer values.
+ * Receives the question so label-stored keys resolve through the identical
+ * exact/unique alignment instead of a separate fuzzy matcher.
+ */
+export function answerIncludesOption(q: QuizQuestion, optionValue: string): boolean {
+  return toArray(q.answer).some((a) => resolveAnswerKeyToValue(q, a) === optionValue);
+}
+
+/** Grade choice questions locally. Returns results only for non-short-answer questions. */
 export function gradeChoiceQuestions(
   questions: QuizQuestion[],
   answers: Record<string, string | string[]>,

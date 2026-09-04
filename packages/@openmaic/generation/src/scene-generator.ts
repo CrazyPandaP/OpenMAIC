@@ -966,40 +966,16 @@ export function normalizeQuizAnswer(
     return answers;
   }
 
-  const canon = (s: string) =>
-    s
-      .normalize('NFKC') // full-width chars → half-width
-      .replace(/\s+/g, '') // drop all whitespace
-      .replace(/^[A-Za-z][.、:：)]\s*/, '') // strip "A." style prefixes
-      .toLowerCase();
-
-  // Fail closed on ambiguity: convert only when exactly one distinct option
-  // value matches canonically. Two options matching the same key (or both a
-  // value and a label matching) leave the answer untouched — consistent with
-  // the grading-side resolver.
-  /**
-   * Single-letter probe (parallel to the grading-side helper): if the answer
-   * is a lone letter wrapped in common punctuation ("（Ｂ）", "(b)", "B."),
-   * return that letter (upper-case); otherwise null.
-   */
-  function singleLetterProbe(answer: string): string | null {
-    let t = answer.trim().normalize('NFKC');
-    t = t.replace(/^[（(\[【\s]+/, '').replace(/[）)\]】\s]+$/, '');
-    t = t.replace(/[.、。:：]+$/, '');
-    t = t.toLowerCase();
-    return /^[a-z]$/.test(t) ? t.toUpperCase() : null;
-  }
-
+  // Exact alignment only (per review): value or label must match the answer
+  // byte-for-byte; no case folding, whitespace/Unicode normalization, or
+  // wrapper interpretation. Fail closed on ambiguity: convert only when
+  // exactly one distinct option value matches.
   return answers.map((a) => {
-    const ca = canon(a);
-    const probe = singleLetterProbe(a);
+    const valueMatches = options.filter((o) => o.value === a);
+    const labelMatches = options.filter((o) => o.label === a);
     const candidates = new Set<string>();
-    for (const o of options) {
-      if (canon(o.value) === ca || canon(o.label) === ca) candidates.add(o.value);
-      if (probe !== null && canon(o.value) === probe.toLowerCase()) candidates.add(o.value);
-    }
-    // Fail closed on ambiguity: convert only when exactly one distinct option
-    // value matches; ambiguous or unknown answers stay untouched.
+    for (const o of valueMatches) candidates.add(o.value);
+    for (const o of labelMatches) candidates.add(o.value);
     if (candidates.size === 1) return [...candidates][0];
     return a;
   });
